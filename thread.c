@@ -35,6 +35,9 @@ static struct list sleep_list;
 /*minimum tick that needs to wake up*/
 static long long min_sleep;
 
+/* load_avg */
+static int load_avg;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -101,12 +104,13 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&sleep_list);
-
+    
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->sleep_tick = 0;
+  initial_thread->nice=0;
   initial_thread->tid = allocate_tid ();
 }
 
@@ -230,6 +234,7 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
   t->sleep_tick=0;
+  t->nice=thread_current()->nice;
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
   kf->eip = NULL;
@@ -246,7 +251,7 @@ thread_create (const char *name, int priority,
 
   /* Add to run queue. */
   thread_unblock (t);
-
+  thread_yield ();
   return tid;
 }
 
@@ -358,25 +363,82 @@ thread_yield (void)
   intr_set_level (old_level);
 }
 
+/* update donated priority of current thread
+return true if donated priority change
+*/
+void 
+thread_update_dp(struct thread *t)
+{
+	int original = t->donated;
+	// if thread is not holding any lock, update to original priority 
+	if (list_empty(&t->holding))
+	{
+		t->donated = t->priority;
+	}
+	else
+	{
+		int dp = lock_highest_priority(&t->holding)->priority;
+		if (t->priority > dp)
+		{
+			t->donated = t->priority;
+		}
+		else
+		{
+			t->donated = dp;
+		}
+	}
+	// if priority of thread is changed, update priority of parent thread
+	if (original != t->donated && t->lock != NULL)
+	{
+		lock_update_priority(t->lock);
+	}
+}
+
+/* compare priority of thread */
+bool
+thread_comp_priority(struct list_elem *a, struct list_elem *b, void *aux)
+{
+	return (list_entry(a,struct thread,elem)->donated)<(list_entry(b,struct thread,elem)->donated);
+}
+/*
+  get thread which has the highest priority in ready list
+*/
+struct thread *
+thread_highest_priority(struct list *list)
+{
+	if (list_empty(list)){
+		return NULL;
+	}
+	struct list_elem *e = list_max(list, thread_comp_priority, NULL);
+	return list_entry(e, struct thread, elem);
+}
+
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority)
 {
+  //if advanced scheduler, ignore
+  if(thread_mlfqs)return;
+  //if current thread is not highest, yield thread
+  //printf("before : %d\n",thread_current()->donated);
   thread_current ()->priority = new_priority;
+  thread_update_dp(thread_current ());
+  //printf("after : %d\n",thread_current()->donated);
+  thread_yield();
 }
 
 /* Returns the current thread's priority. */
 int
 thread_get_priority (void)
 {
-  return thread_current ()->priority;
+  return thread_current()->donated;
 }
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED)
+thread_set_nice (int new_nice)
 {
-  /* Not yet implemented. */
+  thread_current()->nice=new_nice;
 }
 
 /* Returns the current thread's nice value. */
@@ -384,7 +446,7 @@ int
 thread_get_nice (void)
 {
   /* Not yet implemented. */
-  return 0;
+  return thread_current()->nice;
 }
 
 /* Returns 100 times the system load average. */
@@ -486,8 +548,14 @@ init_thread (struct thread *t, const char *name, int priority)
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
-  t->priority = priority;
+  if(!thread_mlfqs)
+      t->priority = priority;
   t->magic = THREAD_MAGIC;
+  
+  // initialize added structure of thread
+  t->lock = NULL;
+  list_init(&t->holding); 	
+  t->donated = priority;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -514,7 +582,14 @@ next_thread_to_run (void)
   if (list_empty (&ready_list))
     return idle_thread;
   else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  {
+  	//list_sort (&ready_list, thread_comp_priority, NULL);
+  	//return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  	
+    struct thread *t = thread_highest_priority(&ready_list);
+    list_remove(&(t->elem));
+    return t;
+  }   
 }
 
 /* Completes a thread switch by activating the new thread's page

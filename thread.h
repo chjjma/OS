@@ -93,6 +93,15 @@ struct thread
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
+	// added element by problem 2
+    struct list holding; 				//list of lock held by this thread
+    int donated; 						//donated priority
+    struct lock *lock;					//lock of this thread
+      
+    //added for Advanced Scheduler
+    int nice;                           //nice value
+    int recent_cpu;                     //recent cpu value
+    
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
@@ -121,6 +130,11 @@ void thread_unblock (struct thread *);
 
 bool thread_cmp(const struct list_elem *a, const struct list_elem *b, void *aux);
 void thread_put_sleep(int64_t ticks);
+//added by problem 2
+//void thread_update_dp(struct thread *t);
+bool thread_comp_priority(struct list_elem *a, struct list_elem *b, void *aux);
+struct thread *thread_highest_priority(struct list *list);
+
 
 struct thread *thread_current (void);
 tid_t thread_tid (void);
