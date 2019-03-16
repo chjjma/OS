@@ -419,6 +419,15 @@ thread_comp_priority(struct list_elem *a, struct list_elem *b, void *aux)
 {
 	return (list_entry(a,struct thread,elem)->donated)<(list_entry(b,struct thread,elem)->donated);
 }
+	    
+/* compare priority of thread when mlfqs is true*/
+bool
+thread_comp_priority_mlfqs(struct list_elem *a, struct list_elem *b, void *aux)
+{
+	return calc_priority(list_entry(a,struct thread,elem))
+			<calc_priority(list_entry(b,struct thread,elem));
+}
+	    
 /*
   get thread which has the highest priority in ready list
 */
@@ -428,7 +437,14 @@ thread_highest_priority(struct list *list)
 	if (list_empty(list)){
 		return NULL;
 	}
-	struct list_elem *e = list_max(list, thread_comp_priority, NULL);
+	if (thread_mlfqs==true)
+	{
+		struct list_elem *e = list_max(list, thread_comp_priority_mlfqs, NULL);
+	}
+	else
+	{
+		struct list_elem *e = list_max(list, thread_comp_priority, NULL);
+	}
 	return list_entry(e, struct thread, elem);
 }
 
@@ -450,9 +466,24 @@ thread_set_priority (int new_priority)
 int
 thread_get_priority (void)
 {
+  if (thread_mlfqs==true)
+  {
+  	return calc_priority(thread_current());
+  }
   return thread_current()->donated;
 }
 
+/* calculate the priority of thread*/
+int 
+calc_priority(struct thread *t)
+{
+	int temp;
+	temp = PRI_MAX - (2*t->nice);
+	temp = temp*(1<<14)-(t->recent_cpu/4);
+	temp = (temp + ((1<<14)/2))/(1<<14);
+	return temp;
+}	    
+	    
 /* Sets the current thread's nice value to NICE. */
 void
 thread_set_nice (int new_nice)
