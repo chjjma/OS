@@ -38,6 +38,8 @@ static long long min_sleep;
 /* load_avg */
 static int load_avg;
 
+#define fixed_point 1<<14
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -104,13 +106,15 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&sleep_list);
-    
+  load_avg=0;
+	
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->sleep_tick = 0;
   initial_thread->nice=0;
+  initial_thread->recent_cpu=0;
   initial_thread->tid = allocate_tid ();
 }
 
@@ -147,6 +151,7 @@ thread_tick (void)
 #endif
   else
     kernel_ticks++;
+  if(t!=idle_thread) t->recent_cpu+fixed_point;
   if(min_sleep!=0)
      if(idle_ticks+user_ticks+kernel_ticks>=min_sleep){
 	while(min_sleep==list_entry(list_front(&sleep_list),struct thread, elem)->sleep_tick){
@@ -158,7 +163,21 @@ thread_tick (void)
         else 
 	   min_sleep=list_entry(list_front(&sleep_list),struct thread, elem)->sleep_tick;
      }
-
+  if((idle_ticks+user_ticks+kernel_ticks)%100 == 0){
+  	load_avg=(59*load_avg)/60+(1+list_size(&ready_list))*fixed_point/60;
+	int tmp=2*load_avg;
+	tmp=((int64_t) tmp)*fixed_point/(tmp+fixed_point);
+	t->recent_cpu=((int64_t) tmp)*(t->recent_cpu)/fixed_point + t->nice;
+	for(struct list_elem *e=list_begin(&ready_list); e==list_end(&ready_list); e=list_next(e){
+		struct thread *tm=list_entry(e, struct thread, elem);
+		tm->recent_cpu=((int64_t) tmp)*(tm->recent_cpu)/fixed_point + tm->nice;
+	}
+	for(struct list_elem *e=list_begin(&sleep_list); e==list_end(&sleep_list); e=list_next(e){
+		struct thread *tm=list_entry(e, struct thread, elem);
+		tm->recent_cpu=((int64_t) tmp)*(tm->recent_cpu)/fixed_point + tm->nice;
+	}
+	thread_yield();
+  }
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
     intr_yield_on_return ();
@@ -439,6 +458,7 @@ void
 thread_set_nice (int new_nice)
 {
   thread_current()->nice=new_nice;
+  thread_yield();
 }
 
 /* Returns the current thread's nice value. */
@@ -454,15 +474,20 @@ int
 thread_get_load_avg (void)
 {
   /* Not yet implemented. */
-  return 0;
+  int tmp=100*load_avg;
+  if(tmp>=0) tmp= (tmp+fixed_point/2)/fixed_point;
+  else tmp=(tmp-fixed_point/2)/fixed_point;
+  return tmp;
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void)
 {
-  /* Not yet implemented. */
-  return 0;
+  int tmp=100*thread_current()->recent_cpu;
+  if(tmp>=0) tmp= (tmp+fixed_point/2)/fixed_point;
+  else tmp=(tmp-fixed_point/2)/fixed_point;
+  return tmp;
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
