@@ -38,7 +38,7 @@ static long long min_sleep;
 /* load_avg */
 static int load_avg;
 
-#define fixed_point 1<<14
+#define fixed_point (1<<14)
 
 /* Idle thread. */
 static struct thread *idle_thread;
@@ -112,9 +112,6 @@ thread_init (void)
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
-  initial_thread->sleep_tick = 0;
-  initial_thread->nice=0;
-  initial_thread->recent_cpu=0;
   initial_thread->tid = allocate_tid ();
 }
 
@@ -151,9 +148,10 @@ thread_tick (void)
 #endif
   else
     kernel_ticks++;
-  if(t!=idle_thread) t->recent_cpu+fixed_point;
+  if(t!=idle_thread) t->recent_cpu+=fixed_point;
   if(min_sleep!=0)
-     if(idle_ticks+user_ticks+kernel_ticks>=min_sleep){
+  {
+  	if(idle_ticks+user_ticks+kernel_ticks>=min_sleep){
 	while(min_sleep==list_entry(list_front(&sleep_list),struct thread, elem)->sleep_tick){
            thread_unblock(list_entry(list_pop_front(&sleep_list),struct thread, elem));
 	   if(list_empty(&sleep_list))break;
@@ -162,21 +160,26 @@ thread_tick (void)
 	   min_sleep=0;
         else 
 	   min_sleep=list_entry(list_front(&sleep_list),struct thread, elem)->sleep_tick;
-     }
-  if((idle_ticks+user_ticks+kernel_ticks)%100 == 0){
-  	load_avg=(59*load_avg)/60+(1+list_size(&ready_list))*fixed_point/60;
+    }
+  }
+  if((idle_ticks+user_ticks+kernel_ticks)%100 == 0&&thread_mlfqs==true){
+  	int idle_on=1;
+  	if (thread_current()==idle_thread) idle_on=0;
+  	load_avg=(59*load_avg)/60+(idle_on+list_size(&ready_list))*fixed_point/60;
 	int tmp=2*load_avg;
 	tmp=((int64_t) tmp)*fixed_point/(tmp+fixed_point);
 	t->recent_cpu=((int64_t) tmp)*(t->recent_cpu)/fixed_point + t->nice;
-	for(struct list_elem *e=list_begin(&ready_list); e==list_end(&ready_list); e=list_next(e){
+	struct list_elem *e;
+	for(e=list_begin(&ready_list); e!=list_end(&ready_list); e=list_next(e)){
 		struct thread *tm=list_entry(e, struct thread, elem);
-		tm->recent_cpu=((int64_t) tmp)*(tm->recent_cpu)/fixed_point + tm->nice;
+		tm->recent_cpu=((int64_t) tmp)*(tm->recent_cpu)/fixed_point + tm->nice*fixed_point;
 	}
-	for(struct list_elem *e=list_begin(&sleep_list); e==list_end(&sleep_list); e=list_next(e){
+	for(e=list_begin(&sleep_list); e!=list_end(&sleep_list); e=list_next(e)){
 		struct thread *tm=list_entry(e, struct thread, elem);
-		tm->recent_cpu=((int64_t) tmp)*(tm->recent_cpu)/fixed_point + tm->nice;
+		tm->recent_cpu=((int64_t) tmp)*(tm->recent_cpu)/fixed_point + tm->nice*fixed_point;
 	}
-	thread_yield();
+	//printf("%d %d %d\n",thread_get_load_avg(),idle_on,idle_ticks);
+	intr_yield_on_return ();
   }
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
@@ -193,6 +196,7 @@ thread_cmp(const struct list_elem *a, const struct list_elem *b, void *aux){
 /* care of sleep, for alarm clock*/
 void
 thread_put_sleep(int64_t ticks){
+	//printf("putsleep\n");
     struct thread *t= thread_current();
     if(t==idle_thread)return;
     t->sleep_tick=idle_ticks+user_ticks+kernel_ticks+ticks;
@@ -434,16 +438,17 @@ thread_comp_priority_mlfqs(struct list_elem *a, struct list_elem *b, void *aux)
 struct thread *
 thread_highest_priority(struct list *list)
 {
+	struct list_elem *e;
 	if (list_empty(list)){
 		return NULL;
 	}
 	if (thread_mlfqs==true)
 	{
-		struct list_elem *e = list_max(list, thread_comp_priority_mlfqs, NULL);
+		e = list_max(list, thread_comp_priority_mlfqs, NULL);
 	}
 	else
 	{
-		struct list_elem *e = list_max(list, thread_comp_priority, NULL);
+		e = list_max(list, thread_comp_priority, NULL);
 	}
 	return list_entry(e, struct thread, elem);
 }
@@ -479,8 +484,8 @@ calc_priority(struct thread *t)
 {
 	int temp;
 	temp = PRI_MAX - (2*t->nice);
-	temp = temp*(1<<14)-(t->recent_cpu/4);
-	temp = (temp + ((1<<14)/2))/(1<<14);
+	temp = temp*fixed_point-(t->recent_cpu/4);
+	temp = (temp + (fixed_point/2))/fixed_point;
 	return temp;
 }	    
 	    
@@ -612,6 +617,9 @@ init_thread (struct thread *t, const char *name, int priority)
   t->lock = NULL;
   list_init(&t->holding); 	
   t->donated = priority;
+  t->sleep_tick = 0;
+  t->nice=0;
+  t->recent_cpu=0;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -734,3 +742,4 @@ allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
