@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <list.h>
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
@@ -17,9 +18,67 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
+#include "lib/kernel/list.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+
+struct proc {
+	pid_t parent;
+	pid_t child;
+	int status;
+	bool returned;
+};
+
+static struct proc procs[1000];
+static int proc_size=0;
+
+// check whether process is child or not
+bool is_child(tid_t child_tid){
+	struct thread *t;
+	struct list child_list = thread_current()->child_list;
+	struct list_elem *begin = list_begin(&child_list);
+	struct list_elem *end = list_end(&child_list);
+	struct list_elem *e;
+	for(e = begin; e!= end; e=list_next(e)){
+		t = list_entry(e, struct thread, child_elem);
+		if (t->tid == child_tid){
+			return true;
+		}
+	}
+	return false;
+}
+
+// exit
+void proc_exit(int status){
+	struct thread *parent = thread_current()->parent;
+	if(parent != NULL){
+		procs[proc_size].parent = parent->tid;
+		procs[proc_size].child = thread_current()->tid;
+		procs[proc_size].status = status;
+		procs[proc_size].returned = false;
+		proc_size++;
+		
+		if (parent->waiting == procs[proc_size].child){
+			sema_up(parent->sema);
+		}
+		list_remove(&thread_current()->child_elem);
+	}
+	
+	struct thread *t;
+	struct list child_list = thread_current()->child_list;
+	struct list_elem *begin = list_begin(&child_list);
+	struct list_elem *end = list_end(&child_list);
+	struct list_elem *e;
+	for(e = begin; e!= end; e=list_next(e)){
+		t = list_entry(e, struct thread, child_elem);
+		t->parent = NULL;
+	}
+	
+	printf("%s: exit(%d)\n", thread_current()->name, status);
+	thread_exit();
+}
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -37,12 +96,13 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
   int i=0,j=0;
+  
   //parsing arguments
   while(i<PGSIZE&&file_name[i]!='\0'){
     while(file_name[i]!=' '&&file_name[i]!='\0'){
-	fn_copy[j]=file_name[i];
-	i+=1;
-	j+=1;
+	  fn_copy[j]=file_name[i];
+	  i+=1;
+	  j+=1;
     }
     if(file_name[i]==' '){
 	fn_copy[j++]='\0';
@@ -50,11 +110,28 @@ process_execute (const char *file_name)
     }
   }
   fn_copy[j]='\0';
+  
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
+}
+
+/* A function that runs exec on syscall
+*/
+pid_t
+proc_exec (const char *file_name)
+{
+  struct semaphore sema;
+  sema_init(&sema,0);
+  thread_current()->sema=&sema;
+  
+  tid_t tid = process_execute(file_name);
+  if(tid==TID_ERROR) return -1;
+  
+  sema_down(&sema);
+  return thread_current()->proc_exec_return;
 }
 
 /* A thread function that loads a user process and makes it start
@@ -77,6 +154,7 @@ start_process (void *f_name)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
+  
   char *argv[cnt],*tmp;
   i=l;
   int j=0;
@@ -95,8 +173,13 @@ start_process (void *f_name)
   asm volatile("PUSH %0;" "PUSH %1" : : "g" (argv[0]), "g"(cnt));  
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
+  if (!success){
+    if(thread_current()->parent!=NULL){ 
+        thread_current()->parent->proc_exec_return=-1;
+        sema_up(thread_current()->parent->sema);
+    }
     thread_exit ();
+  }
   
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -104,6 +187,8 @@ start_process (void *f_name)
      arguments on the stack in the form of a `struct intr_frame',
      we just point the stack pointer (%esp) to our stack frame
      and jump to it. */
+  thread_current()->parent->proc_exec_return=thread_tid();
+  sema_up(thread_current()->parent->sema);
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
 }
@@ -120,9 +205,26 @@ start_process (void *f_name)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
-  return -1;
+	tid_t parent_tid = thread_current()->tid;
+	
+	if (is_child(child_tid)){
+		struct semaphore sema;
+		sema_init(&sema, 0);
+		thread_current()->waiting = child_tid;
+		thread_current()->sema = &sema;
+		sema_down(&sema);
+	}
+	int i;
+	for (i=0; i<proc_size; i++){
+		if (procs[i].parent == parent_tid && procs[i].child == child_tid){
+			if (procs[i].returned == true) return -1;
+			procs[i].returned = true;
+			return procs[i].status;
+		}
+	}
+	return -1;
 }
 
 /* Free the current process's resources. */
@@ -497,3 +599,4 @@ install_page (void *upage, void *kpage, bool writable)
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
+

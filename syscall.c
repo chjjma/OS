@@ -9,23 +9,121 @@
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "devices/input.h"
+#include "threads/vaddr.h"
 
 static void syscall_handler (struct intr_frame *);
 static struct file *fd_con[100];
 static int valid=1;
+void halt(void);
+void exit(int status);
+pid_t exec(const char *cmd_line);
+int wait(pid_t pid);
+bool create(const char *file, unsigned initial_size);
+bool remove(const char *file);
+int open(const char *file);
+int filesize(int fd);
+int read(int fd, void *buffer, unsigned size);
+int write(int fd, const void *buffer, unsigned size);
+void seek(int fd, unsigned position);
+unsigned tell(int fd);
+void close(int fd);
+
+/* Reads a byte at user virtual address UADDR.
+   UADDR must be below PHYS_BASE.
+   Returns the byte value if successful, -1 if a segfault
+   occurred. */
+static int
+get_user (const uint8_t *uaddr)
+{
+  if((uint32_t)uaddr > (uint32_t)PHYS_BASE){
+  	return -1;
+  }
+  int result;
+  asm ("movl $1f, %0; movzbl %1, %0; 1:"
+       : "=&a" (result) : "m" (*uaddr));
+  return result;
+}
+ 
+/* Writes BYTE to user address UDST.
+   UDST must be below PHYS_BASE.
+   Returns true if successful, false if a segfault occurred. */
+static bool
+put_user (uint8_t *udst, uint8_t byte)
+{
+  if((uint32_t)udst > (uint32_t)PHYS_BASE){
+  	return -1;
+  }
+  int error_code;
+  asm ("movl $1f, %0; movb %b2, %1; 1:"
+       : "=&a" (error_code), "=m" (*udst) : "q" (byte));
+  return error_code != -1;
+}
 
 void
 syscall_init (void) 
 {
+	printf("system call start\n");
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
 }
 
 static void
 syscall_handler (struct intr_frame *f) 
 {
-  
-  printf ("system call!\n");
-  thread_exit ();
+    uint32_t arg0, arg1, arg2, arg3;
+	uint32_t *esp;
+	esp=(uint32_t *)f->esp;
+	arg0 = esp[0];
+	arg1 = esp[1];
+	arg2 = esp[2];
+	arg3 = esp[3];
+	uint32_t ret=0;
+	printf("system call:%d %d %d %d\n",arg0,arg1,arg2,arg3);
+	switch(arg0){
+		case SYS_HALT:                   /* Halt the operating system. */
+			halt();
+			break;
+		case SYS_EXIT:                   /* Terminate this process. */
+			exit((int)arg1);
+		    break;
+	    case SYS_EXEC:                   /* Start another process. */
+	    	ret = exec ((char *)arg1);
+	    	break;
+	    case SYS_WAIT:                   /* Wait for a child process to die. */
+	    	ret = wait ((pid_t)arg1);
+	    	break;
+	    case SYS_CREATE:                 /* Create a file. */
+	    	ret = create((char *)arg1, (unsigned)arg2);
+	    	break;
+	    case SYS_REMOVE:                 /* Delete a file. */
+	    	ret = remove((char *)arg1);
+	    	break;
+	    case SYS_OPEN:                   /* Open a file. */
+	    	ret = open ((char *)arg1);
+	    	break;
+	    case SYS_FILESIZE:               /* Obtain a file's size. */
+	    	ret = filesize((int)arg1);
+	    	break;
+	    case SYS_READ:                   /* Read from a file. */
+	    	ret = read((int)arg1, (void *)arg2, (unsigned)arg3);
+	    	break;
+	    case SYS_WRITE:                  /* Write to a file. */
+	    	ret = write((int)arg1, (void *)arg2,(unsigned)arg3);
+	    	break;
+	    case SYS_SEEK:                   /* Change position in a file. */
+	    	seek((int)arg1, (unsigned)arg2);
+	    	break;
+	    case SYS_TELL:                   /* Report current position in a file. */
+	    	ret = tell((int)arg1);
+	    	break;
+		case SYS_CLOSE:                  /* Close a file. */
+			close((int)arg1);
+			break;
+	    default:
+			printf ("system call!\n");
+  			thread_exit ();
+	    	break;
+	}
+	f->eax = ret;
 }
 
 /*Terminates Pintos by calling shutdown_power_off() 
@@ -42,7 +140,7 @@ void halt (void){
   this is the status that will be returned. Conventionally,
   a status of 0 indicates success and nonzero values indicate errors.*/
 void exit (int status){
-	thread_exit();
+	proc_exit(status);
 }
 
 /*Runs the executable whose name is given in cmd_line, passing any given arguments,
@@ -51,8 +149,7 @@ void exit (int status){
   Thus, the parent process cannot return from the exec until it knows
   whether the child process successfully loaded its executable.
   You must use appropriate synchronization to ensure this.*/
-pid_t exec (const char *cmd_line){
-	return 0;	
+pid_t exec (const char *cmd_line){	
 	return proc_exec(cmd_line);
 }
 
@@ -66,8 +163,7 @@ pid_t exec (const char *cmd_line){
   but the kernel must still allow the parent to retrieve its child's exit status,
   or learn that the child was terminated by the kernel.*/
 int wait (pid_t pid){
-	//not implemented
-  	return 0;
+  return process_wait(pid);
 }
 
 /* Creates a new file called file initially initial_size bytes in size. 
@@ -91,27 +187,28 @@ bool remove (const char *file){
   Returns a nonnegative integer handle called a 
   "file descriptor" (fd), or -1 if the file could not be opened.*/
 int open (const char *file){
-	static int fl=1;
-	static int fdtmp=2,fd;
-	static struct lock fd_lock;
-	static struct file *file_op;
-	if(fl==1){
-	   fl=0;
-	   lock_init(&fd_lock);
-	}
-	file_op=filesys_open(file);
-	if(file_op==NULL) return -1;
-	lock_acquire(&fd_lock);
-	fd = fdtmp++;
-	fd_con[fd]=file_op;
-	valid=fd;
-	lock_release(&fd_lock);
-	return fd;
+    static int fl=1;
+    static int fdtmp=2,fd;
+    static struct lock fd_lock;
+    static struct file *file_op;
+    if(fl==1){
+        fl=0;
+        lock_init(&fd_lock);
+    }
+    file_op=filesys_open(file);
+    if(file_op==NULL) return -1;
+    lock_acquire(&fd_lock);
+    fd = fdtmp++;
+    fd_con[fd]=file_op;
+    valid=fd;
+    lock_release(&fd_lock);
+    return fd;
 }
 
 /* Returns the size, in bytes, of the file open as fd.*/
 int filesize (int fd){
-	return file_length(fd_con[fd]);
+    return file_length(fd_con[fd]);
+	return 0;
 }
 
 /* Reads size bytes from the file open as fd into buffer.
@@ -119,43 +216,43 @@ int filesize (int fd){
    or -1 if the file could not be read (due to a condition other than end of file).
    Fd 0 reads from the keyboard using input_getc().*/
 int read (int fd, void *buffer, unsigned size){
-	if(fd==1||fd>valid)return -1;
-	if(fd>=2) return file_read(fd_con[fd], buffer, size);
-	uint8_t k, *buf;
-	unsigned i=0;
-	k=input_getc();
-	buf=(uint8_t *)buffer;
-	buf[i++]=k;
-	while(k!='\n'&&i<size){//k's condition not satisfied. may be modified.
-	  k=input_getc();
-	  buf[i++]=k;
-	}
-	return i;
+    if(fd==1||fd>valid)return -1;
+    if(fd>=2) return file_read(fd_con[fd], buffer, size);
+    uint8_t k, *buf;
+    unsigned i=0;
+    k=input_getc();
+    buf=(uint8_t *)buffer;
+    buf[i++]=k;
+    while(k!='\n'&&i<size){//k's condition not satisfied. may be modified.
+        k=input_getc();
+        buf[i++]=k;
+    }
+    return i;
 }
 
 /* Writes size bytes from buffer to the open file fd.
   Returns the number of bytes actually written, 
   which may be less than size if some bytes could not be written*/
 int write (int fd, const void *buffer, unsigned size){
-	if(fd==1){
-	  putbuf(buffer, size);
-	  return size;
-	}
-	return file_write(fd_con[fd], buffer, size);
+    if(fd==1){
+        putbuf(buffer, size);
+        return size;
+    }
+    return file_write(fd_con[fd], buffer, size);
 }
 
 /*Changes the next byte to be read or written in open file fd to position,
   expressed in bytes from the beginning of the file.
   (Thus, a position of 0 is the file's start.)*/
 void seek (int fd, unsigned position){
-	file_seek(fd_con[fd], position);
+    file_seek(fd_con[fd], position);
 	return;
 }
 
 /*Returns the position of the next byte to be read or written in open file fd,
   expressed in bytes from the beginning of the file.*/
 unsigned tell (int fd){
-	return file_tell(fd_con[fd]);
+    return file_tell(fd_con[fd]);
 }
 
 /*Closes file descriptor fd.
@@ -163,6 +260,6 @@ unsigned tell (int fd){
   closes all its open file descriptors,
   as if by calling this function for each one.*/
 void close (int fd){
-	file_close(fd_con[fd]);
-	return;
+    file_close(fd_con[fd]);
+    return;
 }
