@@ -37,9 +37,9 @@ static int proc_size=0;
 // check whether process is child or not
 bool is_child(tid_t child_tid){
 	struct thread *t;
-	struct list child_list = thread_current()->child_list;
-	struct list_elem *begin = list_begin(&child_list);
-	struct list_elem *end = list_end(&child_list);
+	struct list *child_list = &thread_current()->child_list;
+	struct list_elem *begin = list_begin(child_list);
+	struct list_elem *end = list_end(child_list);
 	struct list_elem *e;
 	for(e = begin; e!= end; e=list_next(e)){
 		t = list_entry(e, struct thread, child_elem);
@@ -53,7 +53,7 @@ bool is_child(tid_t child_tid){
 // exit
 void proc_exit(int status){
 	struct thread *parent = thread_current()->parent;
-	if(parent != NULL){
+	/*if(parent != NULL){
 		procs[proc_size].parent = parent->tid;
 		procs[proc_size].child = thread_current()->tid;
 		procs[proc_size].status = status;
@@ -67,15 +67,15 @@ void proc_exit(int status){
 	}
 	
 	struct thread *t;
-	struct list child_list = thread_current()->child_list;
-	struct list_elem *begin = list_begin(&child_list);
-	struct list_elem *end = list_end(&child_list);
+	struct list *child_list = &thread_current()->child_list;
+	struct list_elem *begin = list_begin(child_list);
+	struct list_elem *end = list_end(child_list);
 	struct list_elem *e;
 	for(e = begin; e!= end; e=list_next(e)){
 		t = list_entry(e, struct thread, child_elem);
 		t->parent = NULL;
 	}
-	
+	*/	
 	printf("%s: exit(%d)\n", thread_current()->name, status);
 	thread_exit();
 }
@@ -109,8 +109,8 @@ process_execute (const char *file_name)
 	while(file_name[i]==' ') i+=1;
     }
   }
+  fn_copy[j++]='\0';
   fn_copy[j]='\0';
-  
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
@@ -142,7 +142,7 @@ start_process (void *f_name)
   char *file_name=f_name;
   struct intr_frame if_;
   bool success;
-  int cnt=0, i=strlen(file_name)-1,len=0, l=strlen(file_name);
+  int cnt=0, i=0,len=1, l=strlen(file_name);
   while(!(file_name[i]=='\0'&&file_name[i+1]=='\0')){
 	i+=1;
 	len+=1;
@@ -154,23 +154,34 @@ start_process (void *f_name)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
-  
-  char *argv[cnt],*tmp;
-  i=l;
-  int j=0;
-  while(i<=len){
-	asm volatile("PUSH %0" : : "g" (file_name+i));
-	asm volatile("movl %%esp, %0": : "g" (tmp));
-	argv[j]=tmp;
-	j+=1;
-	i+=strlen(file_name+i);
-  }
+  char *argv[cnt+1],*tmp;
   i=0;
-  while(i<cnt){
-	asm volatile("PUSH %0" : : "g" (argv[i]));
-	i+=1;
+  int j=0;
+  tmp=(char *)if_.esp-len;
+  argv[j++]=tmp;
+  while(i<len){
+	*(tmp+i)=file_name[i];
+	if(file_name[i]=='\0'&&i!=len-1)argv[j++]=tmp+i+1;
+	i++;
   }
-  asm volatile("PUSH %0;" "PUSH %1" : : "g" (argv[0]), "g"(cnt));  
+  int modt=(unsigned int)tmp%4;
+  tmp=tmp-modt;
+  for(i=0;i<modt;i++)*(tmp+i)=0;
+  argv[j]=NULL;
+  char **ttmp=(char **)tmp;
+  for(j=cnt;j>=0;j--){
+    ttmp-=1;
+    *ttmp=argv[j];
+}
+  ttmp-=1;
+  *ttmp=(ttmp+1);
+  int *tttmp=(int *)ttmp;
+  tttmp-=1;
+  *tttmp=cnt;
+  ttmp=(char **)tttmp;
+  ttmp-=1;
+  *ttmp=(ttmp-1);
+  if_.esp=(void *)ttmp;
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success){
@@ -188,7 +199,7 @@ start_process (void *f_name)
      we just point the stack pointer (%esp) to our stack frame
      and jump to it. */
   thread_current()->parent->proc_exec_return=thread_tid();
-  sema_up(thread_current()->parent->sema);
+  //sema_up(thread_current()->parent->sema);
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
 }
@@ -208,7 +219,7 @@ int
 process_wait (tid_t child_tid) 
 {
 	tid_t parent_tid = thread_current()->tid;
-	
+	for(;;);
 	if (is_child(child_tid)){
 		struct semaphore sema;
 		sema_init(&sema, 0);
@@ -462,40 +473,56 @@ static bool
 validate_segment (const struct Elf32_Phdr *phdr, struct file *file) 
 {
   /* p_offset and p_vaddr must have the same page offset. */
-  if ((phdr->p_offset & PGMASK) != (phdr->p_vaddr & PGMASK)) 
+  if ((phdr->p_offset & PGMASK) != (phdr->p_vaddr & PGMASK)){ 
+    ASSERT(1&&0);
     return false; 
+}
 
   /* p_offset must point within FILE. */
-  if (phdr->p_offset > (Elf32_Off) file_length (file)) 
+  if (phdr->p_offset > (Elf32_Off) file_length (file)){
+	ASSERT(2&&0); 
     return false;
+}
 
   /* p_memsz must be at least as big as p_filesz. */
-  if (phdr->p_memsz < phdr->p_filesz) 
+  if (phdr->p_memsz < phdr->p_filesz) {
+	ASSERT(3&&0);
     return false; 
+}
 
   /* The segment must not be empty. */
-  if (phdr->p_memsz == 0)
+  if (phdr->p_memsz == 0){
+	ASSERT(4&&0);
     return false;
+}
   
   /* The virtual memory region must both start and end within the
      user address space range. */
-  if (!is_user_vaddr ((void *) phdr->p_vaddr))
+  if (!is_user_vaddr ((void *) phdr->p_vaddr)){
+	ASSERT(5&&0);
     return false;
-  if (!is_user_vaddr ((void *) (phdr->p_vaddr + phdr->p_memsz)))
+}
+  if (!is_user_vaddr ((void *) (phdr->p_vaddr + phdr->p_memsz))){
+	ASSERT(6&&0);
     return false;
+}
 
   /* The region cannot "wrap around" across the kernel virtual
      address space. */
-  if (phdr->p_vaddr + phdr->p_memsz < phdr->p_vaddr)
+  if (phdr->p_vaddr + phdr->p_memsz < phdr->p_vaddr){
+	ASSERT(7&&0);
     return false;
+}
 
   /* Disallow mapping page 0.
      Not only is it a bad idea to map page 0, but if we allowed
      it then user code that passed a null pointer to system calls
      could quite likely panic the kernel by way of null pointer
      assertions in memcpy(), etc. */
-  if (phdr->p_vaddr < PGSIZE)
+  if (phdr->p_offset < PGSIZE){
+	ASSERT(8&&0);
     return false;
+    }
 
   /* It's okay. */
   return true;
