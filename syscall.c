@@ -1,9 +1,11 @@
 #include "userprog/syscall.h"
-#include "userprog/process.h"
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+
+//added
+#include "userprog/process.h"
 #include "threads/synch.h"
 #include "threads/init.h"
 #include "filesys/filesys.h"
@@ -12,8 +14,11 @@
 #include "threads/vaddr.h"
 
 static void syscall_handler (struct intr_frame *);
+
+//added
 static struct file *fd_con[100];
 static int valid=1;
+
 void halt(void);
 void exit(int status);
 pid_t exec(const char *cmd_line);
@@ -28,6 +33,13 @@ void seek(int fd, unsigned position);
 unsigned tell(int fd);
 void close(int fd);
 
+//pintos -v -k -T 60 --qemu --fs-disk=2 -p tests/userprog/args-none -a args-none -- -q -f run 'args-none'
+void
+syscall_init (void) 
+{
+  intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+}
+
 /* Reads a byte at user virtual address UADDR.
    UADDR must be below PHYS_BASE.
    Returns the byte value if successful, -1 if a segfault
@@ -35,9 +47,6 @@ void close(int fd);
 static int
 get_user (const uint8_t *uaddr)
 {
-  if((uint32_t)uaddr > (uint32_t)PHYS_BASE){
-  	return -1;
-  }
   int result;
   asm ("movl $1f, %0; movzbl %1, %0; 1:"
        : "=&a" (result) : "m" (*uaddr));
@@ -50,20 +59,10 @@ get_user (const uint8_t *uaddr)
 static bool
 put_user (uint8_t *udst, uint8_t byte)
 {
-  if((uint32_t)udst > (uint32_t)PHYS_BASE){
-  	return -1;
-  }
   int error_code;
   asm ("movl $1f, %0; movb %b2, %1; 1:"
        : "=&a" (error_code), "=m" (*udst) : "q" (byte));
   return error_code != -1;
-}
-
-void
-syscall_init (void) 
-{
-	printf("system call start\n");
-  intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
 }
 
 static void
@@ -72,59 +71,254 @@ syscall_handler (struct intr_frame *f)
     uint32_t arg0, arg1, arg2, arg3;
 	uint32_t *esp;
 	esp=(uint32_t *)f->esp;
+	if((unsigned int)esp>=(unsigned int)PHYS_BASE){
+		exit(-1);
+		return;
+	}
+	if(get_user(esp+1)==-1){
+	    exit(-1);
+	    return;
+	}
 	arg0 = esp[0];
-	arg1 = esp[1];
-	arg2 = esp[2];
-	arg3 = esp[3];
 	uint32_t ret=0;
-	printf("system call:%d %d %d %d\n",arg0,arg1,arg2,arg3);
+	//ASSERT(0);
+	//printf("system call:%d\n",arg0);
 	switch(arg0){
 		case SYS_HALT:                   /* Halt the operating system. */
 			halt();
 			break;
 		case SYS_EXIT:                   /* Terminate this process. */
+			if((unsigned int)(esp+1)>=(unsigned int)PHYS_BASE){
+			    exit(-1);
+			    return;
+			}
+        		if(get_user(esp+1)==-1){
+            		    exit(-1);
+           		     return;
+        		}
+			arg1 = esp[1];
 			exit((int)arg1);
 		    break;
 	    case SYS_EXEC:                   /* Start another process. */
+                       if((unsigned int)(esp+1)>=(unsigned int)PHYS_BASE){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+1)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg1 = esp[1];
+                        if((char*)arg1==NULL||(unsigned int)(char*)arg1>=(unsigned int)PHYS_BASE||arg1=='\0'){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(arg1)==-1){
+                            exit(-1);
+                            return;
+                        }
 	    	ret = exec ((char *)arg1);
 	    	break;
 	    case SYS_WAIT:                   /* Wait for a child process to die. */
+                        if((unsigned int)(esp+1)>=(unsigned int)PHYS_BASE){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+1)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg1 = esp[1];
 	    	ret = wait ((pid_t)arg1);
 	    	break;
 	    case SYS_CREATE:                 /* Create a file. */
+                        if((unsigned int)(esp+2)>=(unsigned int)PHYS_BASE){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+1)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg1 = esp[1];
+        		if((char*)arg1==NULL||(unsigned int)(char*)arg1>=(unsigned int)PHYS_BASE||arg1=='\0'){
+			    exit(-1);
+			    return;
+			}
+                        if(get_user(arg1)==-1){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+2)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg2 = esp[2];
 	    	ret = create((char *)arg1, (unsigned)arg2);
 	    	break;
 	    case SYS_REMOVE:                 /* Delete a file. */
+                        if((unsigned int)(esp+1)>=(unsigned int)PHYS_BASE){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+1)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg1 = esp[1];
+                        if((char*)arg1==NULL||(unsigned int)(char*)arg1>=(unsigned int)PHYS_BASE||arg1=='\0'){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(arg1)==-1){
+                            exit(-1);
+                            return;
+                        }
 	    	ret = remove((char *)arg1);
 	    	break;
 	    case SYS_OPEN:                   /* Open a file. */
+                        if((unsigned int)(esp+1)>=(unsigned int)PHYS_BASE){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+1)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg1 = esp[1];
+                        if((char*)arg1==NULL||(unsigned int)(char*)arg1>=(unsigned int)PHYS_BASE||arg1=='\0'){
+                            exit(-1);
+                            return;
+                        }
+			if(get_user(arg1)==-1){
+			    exit(-1);
+			    return;
+			}
 	    	ret = open ((char *)arg1);
 	    	break;
 	    case SYS_FILESIZE:               /* Obtain a file's size. */
+                        if((unsigned int)(esp+1)>=(unsigned int)PHYS_BASE){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+1)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg1 = esp[1];
 	    	ret = filesize((int)arg1);
 	    	break;
 	    case SYS_READ:                   /* Read from a file. */
-	    	ret = read((int)arg1, (void *)arg2, (unsigned)arg3);
+                        if((unsigned int)(esp+3)>=(unsigned int)PHYS_BASE){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+1)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg1 = esp[1];
+                        if(get_user(esp+2)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg2 = esp[2];
+                        if((void*)arg2==NULL||(unsigned int)(void*)arg2>=(unsigned int)PHYS_BASE||arg1=='\0'){
+                            exit(-1);
+                            return;
+                        }
+                       if(get_user(arg2)==-1){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+3)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg3 = esp[3];
+			ret = read((int)arg1, (void *)arg2, (unsigned)arg3);
 	    	break;
 	    case SYS_WRITE:                  /* Write to a file. */
+                        if((unsigned int)(esp+3)>=(unsigned int)PHYS_BASE){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+1)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg1 = esp[1];
+                        if(get_user(esp+2)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg2 = esp[2];
+                        if((void*)arg2==NULL||(unsigned int)(void*)arg2>=(unsigned int)PHYS_BASE||arg2=='\0'){
+                            exit(-1);
+                            return;
+                        }
+                       if(get_user(arg2)==-1){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+3)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg3 = esp[3];
 	    	ret = write((int)arg1, (void *)arg2,(unsigned)arg3);
 	    	break;
 	    case SYS_SEEK:                   /* Change position in a file. */
+                        if((unsigned int)(esp+2)>=(unsigned int)PHYS_BASE){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+1)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg1 = esp[1];
+                        if(get_user(esp+2)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg2 = esp[2];
 	    	seek((int)arg1, (unsigned)arg2);
 	    	break;
 	    case SYS_TELL:                   /* Report current position in a file. */
+                        if((unsigned int)(esp+1)>=(unsigned int)PHYS_BASE){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+1)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg1 = esp[1];
 	    	ret = tell((int)arg1);
 	    	break;
 		case SYS_CLOSE:                  /* Close a file. */
+                        if((unsigned int)(esp+1)>=(unsigned int)PHYS_BASE){
+                            exit(-1);
+                            return;
+                        }
+                        if(get_user(esp+1)==-1){
+                            exit(-1);
+                             return;
+                        }
+			arg1 = esp[1];
 			close((int)arg1);
 			break;
 	    default:
-			printf ("system call!\n");
-  			thread_exit ();
+			//printf ("system call!\n");
+			exit(-1);
+			break;
+  			//thread_exit ();
 	    	break;
 	}
 	f->eax = ret;
 }
+
 
 /*Terminates Pintos by calling shutdown_power_off() 
   (declared in devices/shutdown.h). 
@@ -132,7 +326,6 @@ syscall_handler (struct intr_frame *f)
   because you lose some information about possible deadlock situations, etc.*/
 void halt (void){
 	power_off();
-	return;
 }
 
 /*Terminates the current user program, returning status to the kernel.
@@ -140,7 +333,9 @@ void halt (void){
   this is the status that will be returned. Conventionally,
   a status of 0 indicates success and nonzero values indicate errors.*/
 void exit (int status){
-	proc_exit(status);
+  //update status and exit thread
+  thread_current()->exit_status = status;
+  thread_exit();
 }
 
 /*Runs the executable whose name is given in cmd_line, passing any given arguments,
@@ -150,7 +345,7 @@ void exit (int status){
   whether the child process successfully loaded its executable.
   You must use appropriate synchronization to ensure this.*/
 pid_t exec (const char *cmd_line){	
-	return proc_exec(cmd_line);
+	return process_execute(cmd_line);
 }
 
 /*Waits for a child process pid and retrieves the child's exit status.
@@ -202,13 +397,26 @@ int open (const char *file){
     fd_con[fd]=file_op;
     valid=fd;
     lock_release(&fd_lock);
+    int i=0;
+    struct thread *curr = thread_current();
+    while(curr->openfd[i] != -1){
+	i++;
+    }
+    curr->openfd[i]=fd;
     return fd;
 }
 
 /* Returns the size, in bytes, of the file open as fd.*/
 int filesize (int fd){
+    int i=0;
+    struct thread *curr = thread_current();
+    while(curr->openfd[i]!= fd){
+        i++;
+        if (i==100){
+    	    exit(-1);
+        }
+    }    
     return file_length(fd_con[fd]);
-	return 0;
 }
 
 /* Reads size bytes from the file open as fd into buffer.
@@ -216,8 +424,17 @@ int filesize (int fd){
    or -1 if the file could not be read (due to a condition other than end of file).
    Fd 0 reads from the keyboard using input_getc().*/
 int read (int fd, void *buffer, unsigned size){
-    if(fd==1||fd>valid)return -1;
-    if(fd>=2) return file_read(fd_con[fd], buffer, size);
+    if(fd>=1) {
+        int i=0;
+    	struct thread *curr = thread_current();
+    	while(curr->openfd[i]!= fd){
+    	    i++;
+    	    if (i==100){
+    		exit(-1);
+	    }
+	}
+	return file_read(fd_con[fd], buffer, size);
+    }
     uint8_t k, *buf;
     unsigned i=0;
     k=input_getc();
@@ -234,9 +451,27 @@ int read (int fd, void *buffer, unsigned size){
   Returns the number of bytes actually written, 
   which may be less than size if some bytes could not be written*/
 int write (int fd, const void *buffer, unsigned size){
+    if(fd==0||fd>valid)return -1;
     if(fd==1){
-        putbuf(buffer, size);
+	if(size>100){
+	   unsigned int k=0;
+	   while (k<size){
+		unsigned int min;
+		min= size-k>100 ? 100 : size-k;
+		putbuf(buffer+k, min);
+		k+=100;
+	   }
+	}
+        else putbuf(buffer, size);
         return size;
+    }
+    int i=0;
+    struct thread *curr = thread_current();
+    while(curr->openfd[i]!= fd){
+    	i++;
+    	if (i==100){
+    	    exit(-1);
+    	}
     }
     return file_write(fd_con[fd], buffer, size);
 }
@@ -245,13 +480,29 @@ int write (int fd, const void *buffer, unsigned size){
   expressed in bytes from the beginning of the file.
   (Thus, a position of 0 is the file's start.)*/
 void seek (int fd, unsigned position){
+    int i=0;
+    struct thread *curr = thread_current();
+    while(curr->openfd[i]!= fd){
+    	i++;
+    	if (i==100){
+            exit(-1);
+    	}
+    }
     file_seek(fd_con[fd], position);
-	return;
+    return;
 }
 
 /*Returns the position of the next byte to be read or written in open file fd,
   expressed in bytes from the beginning of the file.*/
 unsigned tell (int fd){
+    int i=0;
+    struct thread *curr = thread_current();
+    while(curr->openfd[i]!= fd){
+    	i++;
+    	if (i==100){
+    	    exit(-1);
+	}
+    }
     return file_tell(fd_con[fd]);
 }
 
@@ -260,6 +511,16 @@ unsigned tell (int fd){
   closes all its open file descriptors,
   as if by calling this function for each one.*/
 void close (int fd){
+    int i=0;
+    struct thread *curr = thread_current();
+    while(curr->openfd[i]!= fd){
+    	i++;
+    	if (i==100){
+    	    exit(-1);
+	}
+    }
+    curr->openfd[i] = -1;
     file_close(fd_con[fd]);
     return;
 }
+
