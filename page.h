@@ -21,7 +21,7 @@ struct sup_page_table_entry
 void page_init (void);
 struct sup_page_table_entry *allocate_page (void *addr);
 struct sup_page_table_entry *allocaate_read_only_page (void *addr);
-struct sup_page_table_entry *find_page(void *addr)
+struct sup_page_table_entry *find_page(void *addr);
 struct void change_spte_paddr(struct sup_page_table_entry *spte, void *addr);
 struct void change_spte_time(struct sup_page_table_entry *spte, uint64_t time);
 struct void change_spte_loc(struct sup_page_table_entry *spte, short loc);
