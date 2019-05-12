@@ -23,9 +23,9 @@ int swapsize;
 void 
 swap_init (void)
 {
-  swap_device=disk_get(1,1);
-  swapsize=DISK_SECTOR_SIZE*disk_size(swap_device)/PGSIZE;
-  swap_table=bitmap_create(disk_size(swapsize);
+  swap_device = disk_get(1,1);
+  swapsize = DISK_SECTOR_SIZE*disk_size(swap_device)/PGSIZE;
+  swap_table = bitmap_create(disk_size(swapsize));
   lock_init(swap_lock);
 }
 
@@ -42,16 +42,14 @@ swap_init (void)
  * of the disk into the frame. 
  */ 
 bool 
-swap_in (void *addr)
+swap_in (int index, uint8_t *frame)
 {
-  struct sup_page_table_entry spte=find_page(addr);
-  ASSERT(spte->loc != 1);
-  if(!swap_out()) return false;
-  int index=(int)spte->phys_addr;
   lock_acquire(swap_lock);
-	if(swap_table[index]==false) return false;
+  ASSERT(index>=0);
+  if(swap_table[index]==false) {
+	return false;	
+  }
   lock_release(swap_lock);
-  uint8_t *frame=allocate_frame(addr);
   read_from_disk(frame, index);
   lock_acquire(swap_lock);
 	swap_table[index]=false;
@@ -74,18 +72,21 @@ swap_in (void *addr)
  * of in-use and free swap slots.
  */
 bool
-swap_out (void)
+swap_out (uint8_t *frame, struct sup_page_table_entry *spte)
 {
-  uint8_t *frame=evict_frame();
-  if(frame==NULL)return false;
+  if(frame==NULL) return false;
   lock_acquire(swap_lock);
-   
   int i;
-  for(i=0;i<swapsize;i++)if(swap_table[i]==false) break;
-  if(i==swapsize)PANIC();
+  for(i=0;i<swapsize;i++){
+  	if(swap_table[i]==false) break;
+  }
+  if (i==swapsize) {
+  	ASSERT(0);
+  	PANIC();
+  }
   swap_table[i]=true;
   write_to_disk(frame,i);
-  find_frame(frame)->spte->phys_addr=i;
+  spte->swap_index=i;
   lock_release(swap_lock);
   return true;
 }
@@ -96,21 +97,18 @@ swap_out (void)
  */
 void read_from_disk (uint8_t *frame, int index)
 {
-  uint32_t ind=4*((uint32_t)find_frame(frame)->spte->phys_addr);
-  disk_read(swap_disk, ind, frame);
-  disk_read(swap_disk, ind+1, frame+DISK_SECTOR_SIZE);
-  disk_read(swap_disk, ind+2, frame+2*DISK_SECTOR_SIZE);
-  disk_read(swap_disk, ind+3, frame+3*DISK_SECTOR_SIZE);
+  disk_read(swap_disk, 4*index, frame);
+  disk_read(swap_disk, 4*index+1, frame+DISK_SECTOR_SIZE);
+  disk_read(swap_disk, 4*index+2, frame+2*DISK_SECTOR_SIZE);
+  disk_read(swap_disk, 4*index+3, frame+3*DISK_SECTOR_SIZE);
 }
 
 /* Write data to swap device from frame */
 void write_to_disk (uint8_t *frame, int index)
 {
-  uint32_t ind=4*((uint32_t)find_frame(frame)->spte->phys_addr);
-  disk_write(swap_disk, ind, frame);
-  disk_write(swap_disk, ind+1, frame+DISK_SECTOR_SIZE);
-  disk_write(swap_disk, ind+2, frame+2*DISK_SECTOR_SIZE);
-  disk_write(swap_disk, ind+3, frame+3*DISK_SECTOR_SIZE);
+  disk_write(swap_disk, 4*index, frame);
+  disk_write(swap_disk, 4*index+1, frame+DISK_SECTOR_SIZE);
+  disk_write(swap_disk, 4*index+2, frame+2*DISK_SECTOR_SIZE);
+  disk_write(swap_disk, 4*index+3, frame+3*DISK_SECTOR_SIZE);
 
 }
-
