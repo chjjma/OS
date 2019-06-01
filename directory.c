@@ -86,9 +86,15 @@ dirsys_open(char *name){
 		return dir_open_root();
 	}
 	if (strcmp(name,".")==0){
+		if (thread_current()->dir->inode->removed){
+			return NULL;
+		}
 		return dir_reopen(thread_current()->dir);
 	}
 	if (strcmp(name,"..")==0){
+		if (thread_current()->dir->inode->removed){
+			return NULL;
+		}
 		return dir_open(open_parent_dir(thread_current()->dir->inode));
 	}
 	char *buf = name;
